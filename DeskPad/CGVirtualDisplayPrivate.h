@@ -46,7 +46,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(readonly, nonatomic) unsigned int productID; // @synthesize productID=_productID;
 @property(readonly, nonatomic) unsigned int vendorID; // @synthesize vendorID=_vendorID;
 
-- (instancetype)initWithDescriptor:(CGVirtualDisplayDescriptor *)arg1;
+- (nullable instancetype)initWithDescriptor:(CGVirtualDisplayDescriptor *)arg1;
 - (BOOL)applySettings:(CGVirtualDisplaySettings *)arg1;
 
 @end

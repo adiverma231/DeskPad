@@ -1,113 +1,187 @@
 import Cocoa
-import ReSwift
+import QuartzCore
 
-enum ScreenViewAction: Action {
-    case setDisplayID(CGDirectDisplayID)
-}
+final class ScreenViewController: NSViewController, NSWindowDelegate {
+    var onClose: (() -> Void)?
 
-class ScreenViewController: SubscriberViewController<ScreenViewData>, NSWindowDelegate {
+    var displayID: CGDirectDisplayID? { display?.displayID }
+
     override func loadView() {
         view = NSView()
+        view.layer = CALayer()
+        view.layer?.backgroundColor = NSColor.black.cgColor
+        view.layer?.isOpaque = true
         view.wantsLayer = true
         view.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(didClickOnScreen)))
     }
 
-    private var display: CGVirtualDisplay!
-    private var stream: CGDisplayStream?
-    private var isWindowHighlighted = false
-    private var previousResolution: CGSize?
-    private var previousScaleFactor: CGFloat?
+    private var display: CGVirtualDisplay?
+    private var displaySerialNumber: UInt32 = 0x0001
+    private var displayName = "DeskPad Display"
+    private var stream: DisplayStream?
+    private var mouseTimer: Timer?
+    private var displayFrame = CGRect.zero
+    private var displayScaleFactor: CGFloat = 1
+    private var displayRefreshRate: Double = 0
+    private var isWindowHighlighted: Bool?
+    private var isUpdatingScreenConfiguration = false
+
+    convenience init(serialNumber: UInt32, name: String = "DeskPad Display") {
+        self.init(nibName: nil, bundle: nil)
+        displaySerialNumber = serialNumber
+        displayName = name
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
-        descriptor.name = "DeskPad Display"
+        descriptor.name = displayName
         descriptor.maxPixelsWide = 5120
         descriptor.maxPixelsHigh = 2160
         descriptor.sizeInMillimeters = CGSize(width: 1600, height: 1000)
         descriptor.productID = 0x1234
         descriptor.vendorID = 0x3456
-        descriptor.serialNum = 0x0001
+        descriptor.serialNum = displaySerialNumber
 
-        let display = CGVirtualDisplay(descriptor: descriptor)
-        store.dispatch(ScreenViewAction.setDisplayID(display.displayID))
+        guard let display = CGVirtualDisplay(descriptor: descriptor) else { return }
         self.display = display
 
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = [
+        let resolutions: [(width: Int, height: Int)] = [
             // 32:9
-            CGVirtualDisplayMode(width: 5120, height: 1440, refreshRate: 60),
+            (5120, 1440),
             // 21:9 (239:100, 12:5)
-            CGVirtualDisplayMode(width: 5120, height: 2160, refreshRate: 60),
-            CGVirtualDisplayMode(width: 3840, height: 1600, refreshRate: 60),
-            CGVirtualDisplayMode(width: 3440, height: 1440, refreshRate: 60),
+            (5120, 2160),
+            (3840, 1600),
+            (3440, 1440),
             // 16:9
-            CGVirtualDisplayMode(width: 3840, height: 2160, refreshRate: 60),
-            CGVirtualDisplayMode(width: 2560, height: 1440, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1600, height: 900, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1366, height: 768, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1280, height: 720, refreshRate: 60),
+            (3840, 2160),
+            (2560, 1440),
+            (1920, 1080),
+            (1600, 900),
+            (1366, 768),
+            (1280, 720),
             // 16:10
-            CGVirtualDisplayMode(width: 2560, height: 1600, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1920, height: 1200, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1680, height: 1050, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1440, height: 900, refreshRate: 60),
-            CGVirtualDisplayMode(width: 1280, height: 800, refreshRate: 60),
+            (2560, 1600),
+            (1920, 1200),
+            (1680, 1050),
+            (1440, 900),
+            (1280, 800),
         ]
-        display.apply(settings)
-    }
-
-    override func update(with viewData: ScreenViewData) {
-        if viewData.isWindowHighlighted != isWindowHighlighted {
-            isWindowHighlighted = viewData.isWindowHighlighted
-            view.window?.backgroundColor = isWindowHighlighted
-                ? NSColor(named: "TitleBarActive")
-                : NSColor(named: "TitleBarInactive")
-            if isWindowHighlighted {
-                view.window?.orderFrontRegardless()
+        // System Settings only offers refresh rates advertised as modes of the same resolution.
+        let refreshRates: [CGFloat] = [60, 90, 120, 144]
+        settings.modes = resolutions.flatMap { resolution in
+            refreshRates.map { refreshRate in
+                CGVirtualDisplayMode(width: UInt(resolution.width), height: UInt(resolution.height), refreshRate: refreshRate)
             }
         }
-
-        if
-            viewData.resolution != .zero,
-            viewData.resolution != previousResolution
-            || viewData.scaleFactor != previousScaleFactor
-        {
-            previousResolution = viewData.resolution
-            previousScaleFactor = viewData.scaleFactor
-            stream = nil
-            view.window?.setContentSize(viewData.resolution)
-            view.window?.contentAspectRatio = viewData.resolution
-            view.window?.center()
-            let stream = CGDisplayStream(
-                dispatchQueueDisplay: display.displayID,
-                outputWidth: Int(viewData.resolution.width * viewData.scaleFactor),
-                outputHeight: Int(viewData.resolution.height * viewData.scaleFactor),
-                pixelFormat: 1_111_970_369,
-                properties: [
-                    CGDisplayStream.showCursor: true,
-                ] as CFDictionary,
-                queue: .main,
-                handler: { [weak self] _, _, frameSurface, _ in
-                    if let surface = frameSurface {
-                        self?.view.layer?.contents = surface
-                    }
-                }
-            )
-            self.stream = stream
-            stream?.start()
+        guard display.apply(settings) else {
+            self.display = nil
+            return
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(updateScreenConfiguration),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: NSApplication.shared
+        )
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        updateScreenConfiguration()
+
+        if mouseTimer == nil {
+            // Polling avoids a global event tap and its permissions/high-frequency mouse events.
+            let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+                self?.updateMouseLocation()
+            }
+            timer.tolerance = 0.05
+            RunLoop.main.add(timer, forMode: .common)
+            mouseTimer = timer
+        }
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        updateStream()
+    }
+
+    @objc private func updateScreenConfiguration() {
+        guard let window = view.window, let display = display else { return }
+        guard let screen = NSScreen.screens.first(where: { $0.displayID == display.displayID }) else {
+            displayFrame = .zero
+            stream = nil
+            updateMouseLocation()
+            return
+        }
+
+        let resolutionChanged = displayFrame.size != screen.frame.size || displayScaleFactor != screen.backingScaleFactor
+        let refreshRate = CGDisplayCopyDisplayMode(display.displayID)?.refreshRate ?? 60
+        if resolutionChanged || refreshRate != displayRefreshRate {
+            stream = nil
+        }
+        displayFrame = screen.frame
+        displayScaleFactor = screen.backingScaleFactor
+        displayRefreshRate = refreshRate
+        if resolutionChanged {
+            isUpdatingScreenConfiguration = true
+            window.contentAspectRatio = displayFrame.size
+            window.setContentSize(displayFrame.size)
+            window.center()
+            isUpdatingScreenConfiguration = false
+        }
+        updateStream()
+        updateMouseLocation()
+    }
+
+    private func updateStream() {
+        guard
+            !isUpdatingScreenConfiguration,
+            let display = display,
+            let window = view.window,
+            !window.inLiveResize,
+            let layer = view.layer,
+            let size = DisplayGeometry.captureSize(
+                resolution: displayFrame.size,
+                scaleFactor: displayScaleFactor,
+                previewSize: view.convertToBacking(view.bounds).size
+            ),
+            stream?.size != size
+        else { return }
+
+        // Reuse the current stream during live resize, then allocate only the pixels we can show.
+        stream = nil
+        stream = DisplayStream(displayID: display.displayID, size: size, layer: layer)
+    }
+
+    private func updateMouseLocation() {
+        let isWithinScreen = NSMouseInRect(NSEvent.mouseLocation, displayFrame, false)
+        guard isWithinScreen != isWindowHighlighted else { return }
+        isWindowHighlighted = isWithinScreen
+        view.window?.backgroundColor = NSColor(named: isWithinScreen ? "TitleBarActive" : "TitleBarInactive")
+        if isWithinScreen {
+            view.window?.orderFrontRegardless()
+        }
+    }
+
+    func windowDidEndLiveResize(_: Notification) {
+        updateStream()
+    }
+
+    func windowDidChangeBackingProperties(_: Notification) {
+        updateStream()
     }
 
     func windowWillResize(_ window: NSWindow, to frameSize: NSSize) -> NSSize {
         let snappingOffset: CGFloat = 30
         let contentSize = window.contentRect(forFrameRect: NSRect(origin: .zero, size: frameSize)).size
+        let screenResolution = displayFrame.size
         guard
-            let screenResolution = previousResolution,
+            screenResolution != .zero,
             abs(contentSize.width - screenResolution.width) < snappingOffset
         else {
             return frameSize
@@ -116,14 +190,31 @@ class ScreenViewController: SubscriberViewController<ScreenViewData>, NSWindowDe
     }
 
     @objc private func didClickOnScreen(_ gestureRecognizer: NSGestureRecognizer) {
-        guard let screenResolution = previousResolution else {
-            return
-        }
-        let clickedPoint = gestureRecognizer.location(in: view)
-        let onScreenPoint = NSPoint(
-            x: clickedPoint.x / view.frame.width * screenResolution.width,
-            y: (view.frame.height - clickedPoint.y) / view.frame.height * screenResolution.height
-        )
-        store.dispatch(MouseLocationAction.requestMove(toPoint: onScreenPoint))
+        guard let display = display, let point = DisplayGeometry.displayPoint(
+            for: gestureRecognizer.location(in: view),
+            in: view.bounds,
+            resolution: displayFrame.size
+        ) else { return }
+        CGDisplayMoveCursorToPoint(display.displayID, point)
+        updateMouseLocation()
+    }
+
+    func windowWillClose(_: Notification) {
+        stop()
+        onClose?()
+    }
+
+    func stop() {
+        mouseTimer?.invalidate()
+        mouseTimer = nil
+        NotificationCenter.default.removeObserver(self)
+        displayFrame = .zero
+        stream = nil
+        display = nil
+    }
+
+    deinit {
+        mouseTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 }
