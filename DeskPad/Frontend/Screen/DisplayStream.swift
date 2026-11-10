@@ -5,6 +5,7 @@ import QuartzCore
 
 /// Owns one zero-copy capture stream and the surface currently presented by its layer.
 final class DisplayStream {
+    let displayID: CGDirectDisplayID
     let size: CGSize
 
     private var stream: CGDisplayStream?
@@ -12,6 +13,7 @@ final class DisplayStream {
     private var surface: IOSurfaceRef?
 
     init?(displayID: CGDirectDisplayID, size: CGSize, layer: CALayer) {
+        self.displayID = displayID
         self.size = size
         self.layer = layer
 

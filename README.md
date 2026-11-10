@@ -10,8 +10,10 @@ A lighter fork of [DeskPad](https://github.com/Stengo/DeskPad), a virtual monito
 - **Optional second display.** Each display has its own preview, resolution, refresh rate, and cursor highlighting. The second display is off on every launch.
 - **Refresh-rate selection.** Both displays offer 60, 90, 120, and 144 Hz in macOS Display settings, instead of only 60 Hz.
 - **Leaner builds.** Formatting runs explicitly rather than on every build. Added geometry and live integration checks.
+- **Mirroring-aware previews.** Follows the active mirror source when macOS removes a mirrored virtual display from its list of separate screens, and restarts capture after display reconfiguration.
+- **Interactive previews.** Click to control the displayed desktop with normal clicking, dragging, scrolling, and typing. Press **Esc** or move past the preview’s edge to return.
 
-The original resolution options, HiDPI support, click-to-move cursor behavior, and blue title-bar highlighting are preserved.
+The original resolution options, HiDPI support, and blue title-bar highlighting are preserved.
 
 ## Use
 
@@ -20,6 +22,17 @@ The original resolution options, HiDPI support, click-to-move cursor behavior, a
 - Use **Displays → Show First Display** (**⌘1**) to show or reopen the first preview.
 - Set each display's resolution and refresh rate in **System Settings → Displays**.
 - Grant **Screen Recording** access under **Privacy & Security**, then restart DeskPad.
+- To control a preview, also grant **Accessibility** access when prompted, then click the preview again. While controlling, the pointer appears in the preview and on the target desktop; normal app focus and keyboard shortcuts follow the target app. **Esc** is reserved for releasing control. Finish a drag before moving past the preview’s edge.
+
+### Cast a virtual desktop with AirPlay
+
+1. Keep the DeskPad preview window on your built-in display and move the apps you want to cast onto **DeskPad Display**.
+2. Connect the TV using macOS Screen Mirroring, then in **System Settings → Displays** configure the TV to **mirror DeskPad Display**, not your built-in display. Exact labels vary by macOS version.
+3. Click inside DeskPad’s preview to operate the cast desktop. Press **Esc** or move past its edge to return to the built-in desktop.
+
+DeskPad does not establish the AirPlay connection itself. macOS controls the connection, resolution, and compatible refresh rates. Do not include the built-in display in the mirror group: the preview must live on a separate desktop to avoid capturing itself. The same setup works with a wired external monitor.
+
+Interactive control uses a macOS event tap with explicit Accessibility consent. The app therefore runs **without App Sandbox**; Screen Recording and Accessibility permissions are still enforced by macOS. If Accessibility permission is denied, the preview still works, but input forwarding is unavailable.
 
 Capture continues while a preview is covered. Actual preview and screen-sharing frame rates depend on your physical screen and sharing app; selecting 144 Hz does not guarantee 144 fps throughout.
 
@@ -38,11 +51,12 @@ Open DeskPad, grant access again, and restart it.
 ## Checks
 
 ```sh
-sh Tests/run.sh                # Capture sizing and cursor mapping
-sh Tests/run.sh --integration  # Live capture, two displays, refresh rates, and cleanup
+sh Tests/run.sh                # Capture sizing, input mapping/cleanup, and mirror-source resolution
+sh Tests/run.sh --integration  # Live capture, two displays, mirroring, refresh rates, and cleanup
 ```
 
-For integration checks, quit DeskPad and use an unlocked desktop session with Screen Recording access for the terminal/test executable.
+For integration checks, quit DeskPad and use an unlocked desktop session with Screen Recording access for the terminal/test executable. Avoid moving the pointer during the cursor checks.
+The mirroring checks change only the two test virtual displays and verify fresh colored frames in both previews. AirPlay hardware and interactive control still need manual checks: click, double-click, right-click, drag, scroll, type, use keyboard shortcuts, then verify edge/Esc release and cleanup on display disconnect or sleep. Control requires Accessibility permission for the built app.
 
 ## Credits
 

@@ -22,8 +22,12 @@ enum DisplayIntegrationTests {
     }
 
     static func frame(in controller: ScreenViewController) throws -> IOSurfaceRef {
+        let deadline = Date(timeIntervalSinceNow: 3)
+        while controller.view.layer?.contents == nil, Date() < deadline {
+            pump(for: 0.05)
+        }
         guard let surface = controller.view.layer?.contents else {
-            throw Failure(message: "The preview did not receive a captured frame")
+            throw Failure(message: "The preview did not receive a captured frame (display \(controller.displayID ?? 0))")
         }
         return surface as! IOSurfaceRef
     }
@@ -151,7 +155,8 @@ enum DisplayIntegrationTests {
         try check(CGDisplayMoveCursorToPoint(displayID, CGPoint(x: 100, y: 100)) == .success, "Cursor move failed")
         pump()
         let currentDisplay = NSScreen.screens.first { $0.displayID == displayID }!
-        try check(NSMouseInRect(NSEvent.mouseLocation, currentDisplay.frame, false), "Cursor did not reach virtual display")
+        try check(NSMouseInRect(NSEvent.mouseLocation, currentDisplay.frame, false),
+                  "Cursor did not reach virtual display (mouse \(NSEvent.mouseLocation), screen \(currentDisplay.frame), Quartz \(CGDisplayBounds(displayID)))")
         try check(NSApp.orderedWindows.first === window, "Cursor entry did not bring the preview to the front")
 
         let lastFrame = try frame(in: controller)
@@ -202,7 +207,14 @@ enum DisplayIntegrationTests {
         }
         let secondID = secondController.displayID!
         try check(firstID != secondID && menuItem.state == .on, "Displays must have distinct identities")
-        try check(NSScreen.screens.first { $0.displayID == secondID }?.localizedName == "DeskPad Display 2", "Second display name is ambiguous")
+        // macOS remembers mirror groups for stable display identities across launches.
+        // The independent-display checks need both displays explicitly extended.
+        for id in [firstID, secondID] where CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay {
+            try setMirror(id, source: kCGNullDirectDisplay)
+        }
+        pump(for: 1)
+        try check(NSScreen.screens.first { $0.displayID == secondID }?.localizedName == "DeskPad Display 2",
+                  "Second display name is ambiguous (ID \(secondID), active \(CGDisplayIsActive(secondID)), mirror \(CGDisplayMirrorsDisplay(secondID)), screens \(NSScreen.screens.map { "\($0.displayID): \($0.localizedName)" }))")
         _ = try frame(in: firstController)
         _ = try frame(in: secondController)
 
@@ -215,15 +227,26 @@ enum DisplayIntegrationTests {
         try check(CGDisplayCopyDisplayMode(firstID)?.ioDisplayModeID == firstMode.ioDisplayModeID, "Second display changed the first display's mode")
         try check(CGDisplayCopyDisplayMode(secondID)?.refreshRate == 144, "Second display did not select 144 Hz")
         for (id, window) in [(firstID, first), (secondID, second)] {
+            CGDisplayMoveCursorToPoint(CGMainDisplayID(), CGPoint(x: 100, y: 100))
+            pump()
             CGDisplayMoveCursorToPoint(id, CGPoint(x: 100, y: 100))
             pump()
-            try check(NSApp.orderedWindows.first === window, "Wrong preview raised for cursor entry")
+            try check(NSApp.orderedWindows.first === window,
+                      "Wrong preview raised for cursor entry (target \(id), mirror \(CGDisplayMirrorsDisplay(id)), mouse \(NSEvent.mouseLocation))")
         }
 
+        try checkMirroring(follower: firstController, source: secondController)
+        try checkMirroring(follower: secondController, source: firstController)
+
+        // Losing the mirror source must resume capture of the surviving virtual desktop.
+        try setMirror(firstID, source: secondID)
+        pump(for: 1)
         second.close()
-        pump()
+        pump(for: 1)
         try check(menuItem.state == .off && displayWindow(serial: 2) == nil, "Closing second preview must disable it")
         try check(firstController.displayID == firstID, "Closing second display disconnected the first")
+        try check(DisplayConfiguration(displayID: firstID)?.captureDisplayID == firstID, "Preview did not recover after its mirror source disconnected")
+        _ = try frame(in: firstController)
         delegate.toggleSecondDisplay()
         pump()
         delegate.toggleSecondDisplay()
@@ -247,5 +270,59 @@ enum DisplayIntegrationTests {
         pump()
         try check(displayWindow(serial: 1) != nil && displayWindow(serial: 2) == nil, "Second display was remembered across launches")
         print("Passed second-display menu, independent refresh/cursor handling, close/reopen, quit, and default-off relaunch checks")
+    }
+
+    static func setMirror(_ follower: CGDirectDisplayID, source: CGDirectDisplayID) throws {
+        var configuration: CGDisplayConfigRef?
+        try check(CGBeginDisplayConfiguration(&configuration) == .success, "Could not begin mirror configuration")
+        guard let configuration = configuration else { throw Failure(message: "Missing mirror configuration") }
+        guard CGConfigureDisplayMirrorOfDisplay(configuration, follower, source) == .success else {
+            CGCancelDisplayConfiguration(configuration)
+            throw Failure(message: "Could not configure mirroring")
+        }
+        try check(CGCompleteDisplayConfiguration(configuration, .forSession) == .success, "Could not apply mirroring")
+    }
+
+    static func checkMirroring(follower: ScreenViewController, source: ScreenViewController) throws {
+        let followerID = follower.displayID!
+        let sourceID = source.displayID!
+        try setMirror(followerID, source: sourceID)
+        defer {
+            try? setMirror(followerID, source: kCGNullDirectDisplay)
+            pump(for: 1)
+        }
+        pump(for: 2)
+        try check(CGDisplayMirrorsDisplay(followerID) == sourceID, "macOS did not enable the requested mirror")
+        guard let configuration = DisplayConfiguration(displayID: followerID) else {
+            throw Failure(message: "Mirrored display has no capture configuration")
+        }
+        try check(configuration.captureDisplayID == sourceID, "Mirrored preview is capturing the inactive follower")
+
+        let cocoaBounds = CGRect(x: configuration.bounds.minX,
+                                 y: CGDisplayBounds(CGMainDisplayID()).height - configuration.bounds.maxY,
+                                 width: configuration.bounds.width, height: configuration.bounds.height)
+        let marker = NSWindow(contentRect: CGRect(x: cocoaBounds.minX + 50, y: cocoaBounds.minY + 50, width: 200, height: 150),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        marker.isReleasedWhenClosed = false
+        marker.level = .floating
+        defer { marker.close() }
+
+        for color in [NSColor.red, .green] {
+            marker.backgroundColor = color
+            marker.orderFrontRegardless()
+            pump()
+            for controller in [follower, source] {
+                let surface = try frame(in: controller)
+                let x = Int((marker.frame.midX - cocoaBounds.minX) / cocoaBounds.width * CGFloat(IOSurfaceGetWidth(surface)))
+                let y = Int((cocoaBounds.maxY - marker.frame.midY) / cocoaBounds.height * CGFloat(IOSurfaceGetHeight(surface)))
+                IOSurfaceLock(surface, .readOnly, nil)
+                let address = IOSurfaceGetBaseAddress(surface)
+                let pixel = address.advanced(by: y * IOSurfaceGetBytesPerRow(surface) + x * 4).assumingMemoryBound(to: UInt8.self)
+                let matches = color == .red ? pixel[2] > 200 && pixel[1] < 80 : pixel[1] > 200 && pixel[2] < 80
+                IOSurfaceUnlock(surface, .readOnly, nil)
+                try check(matches, "Mirrored preview is black, stale, or capturing the wrong desktop")
+            }
+        }
+        print("Passed live mirrored capture and fresh-frame checks (\(followerID) → \(sourceID))")
     }
 }

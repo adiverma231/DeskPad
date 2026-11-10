@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		6D2F1486280C20C800A3A2E5 /* DisplayStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F1485280C20C800A3A2E5 /* DisplayStream.swift */; };
 		6D2F148A280C20D000A3A2E5 /* DisplayGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F1487280C20D000A3A2E5 /* DisplayGeometry.swift */; };
+		6D2F1490280C20D000A3A2E5 /* DisplayConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F1491280C20D000A3A2E5 /* DisplayConfiguration.swift */; };
+		6D2F1492280C20D000A3A2E5 /* PreviewControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F1493280C20D000A3A2E5 /* PreviewControl.swift */; };
+		6D2F1494280C20D000A3A2E5 /* PreviewInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F1495280C20D000A3A2E5 /* PreviewInput.swift */; };
 		6D2F148E280C211E00A3A2E5 /* ScreenViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2F148D280C211E00A3A2E5 /* ScreenViewController.swift */; };
 		6D68E1B2287ABDB900CD574A /* NSScreen+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D68E1B1287ABDB900CD574A /* NSScreen+Extensions.swift */; };
 		6DC044522801877F00281728 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DC044512801877F00281728 /* AppDelegate.swift */; };
@@ -19,6 +22,9 @@
 /* Begin PBXFileReference section */
 		6D2F1485280C20C800A3A2E5 /* DisplayStream.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DisplayStream.swift; sourceTree = "<group>"; };
 		6D2F1487280C20D000A3A2E5 /* DisplayGeometry.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DisplayGeometry.swift; sourceTree = "<group>"; };
+		6D2F1491280C20D000A3A2E5 /* DisplayConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayConfiguration.swift; sourceTree = "<group>"; };
+		6D2F1493280C20D000A3A2E5 /* PreviewControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewControl.swift; sourceTree = "<group>"; };
+		6D2F1495280C20D000A3A2E5 /* PreviewInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewInput.swift; sourceTree = "<group>"; };
 		6D2F148D280C211E00A3A2E5 /* ScreenViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ScreenViewController.swift; sourceTree = "<group>"; };
 		6D36BEB92801A39200EAB869 /* CGVirtualDisplayPrivate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CGVirtualDisplayPrivate.h; sourceTree = "<group>"; };
 		6D36BEBA2801A40600EAB869 /* DeskPad-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "DeskPad-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -54,6 +60,7 @@
 			children = (
 				6D2F148D280C211E00A3A2E5 /* ScreenViewController.swift */,
 				6D2F1485280C20C800A3A2E5 /* DisplayStream.swift */,
+				6D2F1493280C20D000A3A2E5 /* PreviewControl.swift */,
 			);
 			path = Screen;
 			sourceTree = "<group>";
@@ -63,6 +70,8 @@
 			children = (
 				6D68E1B1287ABDB900CD574A /* NSScreen+Extensions.swift */,
 				6D2F1487280C20D000A3A2E5 /* DisplayGeometry.swift */,
+				6D2F1491280C20D000A3A2E5 /* DisplayConfiguration.swift */,
+				6D2F1495280C20D000A3A2E5 /* PreviewInput.swift */,
 			);
 			path = Helpers;
 			sourceTree = "<group>";
@@ -174,6 +183,9 @@
 				6D68E1B2287ABDB900CD574A /* NSScreen+Extensions.swift in Sources */,
 				6D2F1486280C20C800A3A2E5 /* DisplayStream.swift in Sources */,
 				6D2F148A280C20D000A3A2E5 /* DisplayGeometry.swift in Sources */,
+				6D2F1490280C20D000A3A2E5 /* DisplayConfiguration.swift in Sources */,
+				6D2F1492280C20D000A3A2E5 /* PreviewControl.swift in Sources */,
+				6D2F1494280C20D000A3A2E5 /* PreviewInput.swift in Sources */,
 				6D2F148E280C211E00A3A2E5 /* ScreenViewController.swift in Sources */,
 				6DC044522801877F00281728 /* AppDelegate.swift in Sources */,
 				6DC04461280191EB00281728 /* main.swift in Sources */,

@@ -37,6 +37,17 @@ enum DisplayGeometryTests {
         }
         precondition(DisplayGeometry.displayPoint(for: .zero, in: .zero, resolution: resolution) == nil)
         precondition(DisplayGeometry.displayPoint(for: .zero, in: bounds, resolution: .zero) == nil)
-        print("Passed 14 capture-size and cursor-mapping checks")
+        let mirrors: [UInt32: UInt32] = [2: 1, 3: 2]
+        precondition(DisplayConfiguration.captureDisplayID(for: 1, mirrors: { mirrors[$0] ?? 0 }) == 1,
+                     "An extended display captures itself")
+        precondition(DisplayConfiguration.captureDisplayID(for: 2, mirrors: { mirrors[$0] ?? 0 }) == 1,
+                     "A mirrored virtual display captures the mirror source")
+        precondition(DisplayConfiguration.captureDisplayID(for: 3, mirrors: { mirrors[$0] ?? 0 }) == 1,
+                     "Resolve the entire mirror chain")
+        precondition(DisplayConfiguration.captureDisplayID(for: 0, mirrors: { _ in 0 }) == nil,
+                     "Do not capture the null display")
+        precondition(DisplayConfiguration.captureDisplayID(for: 1, mirrors: { $0 == 1 ? 2 : 1 }) == nil,
+                     "A transient cyclic mirror configuration must not hang")
+        print("Passed 19 capture-size, cursor-mapping, and mirror-source checks")
     }
 }

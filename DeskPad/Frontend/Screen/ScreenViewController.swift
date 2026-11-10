@@ -7,12 +7,13 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
     var displayID: CGDirectDisplayID? { display?.displayID }
 
     override func loadView() {
-        view = NSView()
+        let preview = PreviewView()
+        preview.onMouseDown = { [weak self] event in self?.controlPreview(with: event) }
+        view = preview
         view.layer = CALayer()
         view.layer?.backgroundColor = NSColor.black.cgColor
         view.layer?.isOpaque = true
         view.wantsLayer = true
-        view.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(didClickOnScreen)))
     }
 
     private var display: CGVirtualDisplay?
@@ -22,7 +23,9 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
     private var mouseTimer: Timer?
     private var displayFrame = CGRect.zero
     private var displayScaleFactor: CGFloat = 1
-    private var displayRefreshRate: Double = 0
+    private var configuration: DisplayConfiguration?
+    private var configurationRetry: DispatchWorkItem?
+    private var previewControl: PreviewControl?
     private var isWindowHighlighted: Bool?
     private var isUpdatingScreenConfiguration = false
 
@@ -88,6 +91,14 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: NSApplication.shared
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(releasePreviewControl),
+            name: NSWorkspace.sessionDidResignActiveNotification, object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(releasePreviewControl),
+            name: NSWorkspace.willSleepNotification, object: nil
+        )
     }
 
     override func viewDidAppear() {
@@ -95,7 +106,7 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
         updateScreenConfiguration()
 
         if mouseTimer == nil {
-            // Polling avoids a global event tap and its permissions/high-frequency mouse events.
+            // Highlighting stays lightweight even when interactive control is not enabled.
             let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
                 self?.updateMouseLocation()
             }
@@ -111,22 +122,50 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
     }
 
     @objc private func updateScreenConfiguration() {
+        releasePreviewControl()
+        configurationRetry?.cancel()
+        applyScreenConfiguration()
+        scheduleConfigurationRetry()
+    }
+
+    private func scheduleConfigurationRetry(attempt: Int = 0) {
+        // AirPlay can announce a mirror change before its capture surface is ready.
+        // Always restart once after settling, then retry only a blank/missing stream.
+        let retry = DispatchWorkItem { [weak self] in
+            guard let self = self, self.display != nil else { return }
+            self.configurationRetry = nil
+            guard attempt == 0 || self.view.layer?.contents == nil else { return }
+            self.applyScreenConfiguration()
+            if attempt < 3, self.view.layer?.contents == nil {
+                self.scheduleConfigurationRetry(attempt: attempt + 1)
+            }
+        }
+        configurationRetry = retry
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 * pow(2, Double(attempt)), execute: retry)
+    }
+
+    private func applyScreenConfiguration() {
+        releasePreviewControl()
         guard let window = view.window, let display = display else { return }
-        guard let screen = NSScreen.screens.first(where: { $0.displayID == display.displayID }) else {
+        // Mirrored followers disappear from NSScreen.screens. Capture their mirror source,
+        // which may be the AirPlay display rather than the original virtual display.
+        guard let configuration = DisplayConfiguration(displayID: display.displayID) else {
+            self.configuration = nil
             displayFrame = .zero
             stream = nil
             updateMouseLocation()
             return
         }
 
-        let resolutionChanged = displayFrame.size != screen.frame.size || displayScaleFactor != screen.backingScaleFactor
-        let refreshRate = CGDisplayCopyDisplayMode(display.displayID)?.refreshRate ?? 60
-        if resolutionChanged || refreshRate != displayRefreshRate {
-            stream = nil
-        }
-        displayFrame = screen.frame
-        displayScaleFactor = screen.backingScaleFactor
-        displayRefreshRate = refreshRate
+        let resolutionChanged = displayFrame.size != configuration.bounds.size || displayScaleFactor != configuration.scaleFactor
+        // Recreate even at identical dimensions: the compositor can replace the surface
+        // during a mirror change without changing the display ID, size, or refresh rate.
+        stream = nil
+        self.configuration = configuration
+        displayFrame = CGRect(x: configuration.bounds.minX,
+                              y: CGDisplayBounds(CGMainDisplayID()).height - configuration.bounds.maxY,
+                              width: configuration.bounds.width, height: configuration.bounds.height)
+        displayScaleFactor = configuration.scaleFactor
         if resolutionChanged {
             isUpdatingScreenConfiguration = true
             window.contentAspectRatio = displayFrame.size
@@ -141,7 +180,7 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
     private func updateStream() {
         guard
             !isUpdatingScreenConfiguration,
-            let display = display,
+            let configuration = configuration,
             let window = view.window,
             !window.inLiveResize,
             let layer = view.layer,
@@ -150,12 +189,12 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
                 scaleFactor: displayScaleFactor,
                 previewSize: view.convertToBacking(view.bounds).size
             ),
-            stream?.size != size
+            stream?.size != size || stream?.displayID != configuration.captureDisplayID
         else { return }
 
         // Reuse the current stream during live resize, then allocate only the pixels we can show.
         stream = nil
-        stream = DisplayStream(displayID: display.displayID, size: size, layer: layer)
+        stream = DisplayStream(displayID: configuration.captureDisplayID, size: size, layer: layer)
     }
 
     private func updateMouseLocation() {
@@ -189,14 +228,38 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
         return window.frameRect(forContentRect: NSRect(origin: .zero, size: screenResolution)).size
     }
 
-    @objc private func didClickOnScreen(_ gestureRecognizer: NSGestureRecognizer) {
-        guard let display = display, let point = DisplayGeometry.displayPoint(
-            for: gestureRecognizer.location(in: view),
-            in: view.bounds,
-            resolution: displayFrame.size
-        ) else { return }
-        CGDisplayMoveCursorToPoint(display.displayID, point)
-        updateMouseLocation()
+    private func controlPreview(with event: NSEvent) {
+        guard let configuration = configuration else { return }
+        releasePreviewControl()
+        if let screen = view.window?.screen,
+           DisplayConfiguration.captureDisplayID(for: screen.displayID) == configuration.captureDisplayID {
+            let alert = NSAlert()
+            alert.messageText = "Move the preview to a separate display"
+            alert.informativeText = "The DeskPad window must be on a display outside the mirror group, such as your built-in display. Otherwise it would capture and control itself."
+            alert.runModal()
+            return
+        }
+        let control = PreviewControl(view: view, displayBounds: configuration.bounds,
+                                     point: view.convert(event.locationInWindow, from: nil))
+        switch control.start(with: event) {
+        case .started:
+            previewControl = control
+        case .accessibilityRequired:
+            let alert = NSAlert()
+            alert.messageText = "Allow DeskPad to control the preview"
+            alert.informativeText = "Enable DeskPad in System Settings → Privacy & Security → Accessibility, then click the preview again. While controlling, press Esc or move past the preview’s edge to return to your built-in display."
+            alert.runModal()
+        case .unavailable:
+            let alert = NSAlert()
+            alert.messageText = "Could not start preview control"
+            alert.informativeText = "macOS could not enable input forwarding. Check DeskPad’s Accessibility permission, quit and reopen DeskPad, then try again."
+            alert.runModal()
+        }
+    }
+
+    @objc private func releasePreviewControl() {
+        previewControl?.stop()
+        previewControl = nil
     }
 
     func windowWillClose(_: Notification) {
@@ -205,16 +268,24 @@ final class ScreenViewController: NSViewController, NSWindowDelegate {
     }
 
     func stop() {
+        releasePreviewControl()
+        configurationRetry?.cancel()
+        configurationRetry = nil
         mouseTimer?.invalidate()
         mouseTimer = nil
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        configuration = nil
         displayFrame = .zero
         stream = nil
         display = nil
     }
 
     deinit {
+        previewControl?.stop()
+        configurationRetry?.cancel()
         mouseTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 }
